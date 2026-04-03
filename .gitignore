@@ -22,6 +22,7 @@ coverage/
 .codex
 .dotnet-home/
 .ollama-tray/
+enable-autostart.ps1
 
 # OS / editor noise
 Thumbs.db
