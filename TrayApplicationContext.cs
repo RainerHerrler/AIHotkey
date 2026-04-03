@@ -6,6 +6,7 @@ namespace AIHotkey;
 
 internal sealed class TrayApplicationContext : ApplicationContext
 {
+    private readonly object _requestSync = new();
     private readonly NotifyIcon _notifyIcon;
     private readonly HotkeyWindow _hotkeyWindow;
     private readonly SettingsStore _settingsStore;
@@ -14,6 +15,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private AppSettings _settings;
     private OllamaClient _ollamaClient;
     private OpenAiClient _openAiClient;
+    private CancellationTokenSource? _activeRequestCts;
+    private RewriteProvider? _queuedProvider;
     private int _isBusy;
 
     public TrayApplicationContext()
@@ -64,14 +67,29 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         if (Interlocked.Exchange(ref _isBusy, 1) == 1)
         {
-            ShowInfo("Already processing a request.");
+            CancellationTokenSource? activeRequest;
+            lock (_requestSync)
+            {
+                _queuedProvider = provider;
+                activeRequest = _activeRequestCts;
+            }
+
+            activeRequest?.Cancel();
+            ShowInfo("Active request canceled. Retrying with the latest request ...");
             return;
         }
 
         string? selectedText = null;
+        CancellationTokenSource? requestCts = null;
         try
         {
-            var cancellationToken = CancellationToken.None;
+            requestCts = new CancellationTokenSource();
+            lock (_requestSync)
+            {
+                _activeRequestCts = requestCts;
+            }
+
+            var cancellationToken = requestCts.Token;
             selectedText = await ClipboardWorkflow.CaptureSelectionAsync(_settings, cancellationToken);
             if (string.IsNullOrWhiteSpace(selectedText))
             {
@@ -88,6 +106,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _logger.Info($"Inserted response with {rewritten.Length} characters from {provider}.");
             ShowInfo("Response inserted.");
         }
+        catch (OperationCanceledException)
+        {
+            _logger.Info($"{provider} rewrite request canceled.");
+            ShowInfo("Request canceled.");
+        }
         catch (Exception ex)
         {
             if (!string.IsNullOrWhiteSpace(selectedText))
@@ -101,7 +124,28 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
         finally
         {
+            requestCts?.Dispose();
+            lock (_requestSync)
+            {
+                if (ReferenceEquals(_activeRequestCts, requestCts))
+                {
+                    _activeRequestCts = null;
+                }
+            }
+
             Interlocked.Exchange(ref _isBusy, 0);
+
+            RewriteProvider? queuedProvider;
+            lock (_requestSync)
+            {
+                queuedProvider = _queuedProvider;
+                _queuedProvider = null;
+            }
+
+            if (queuedProvider is { } nextProvider)
+            {
+                _ = RewriteSelectionAsync(nextProvider);
+            }
         }
     }
 

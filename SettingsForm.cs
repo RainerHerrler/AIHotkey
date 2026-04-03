@@ -69,8 +69,8 @@ internal sealed class SettingsForm : Form
     public SettingsForm(AppSettings settings)
     {
         Text = "AIHotkey Settings";
-        Width = 1100;
-        Height = 860;
+        Width = 2200;
+        Height = 1290;
         MinimumSize = new Size(980, 760);
         StartPosition = FormStartPosition.CenterScreen;
         MinimizeBox = false;
